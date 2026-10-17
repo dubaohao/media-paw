@@ -561,7 +561,10 @@ chrome.runtime.onMessage.addListener(function (Message, sender, sendResponse) {
     if (Message.Message == "enable") {
         G.enable = !G.enable;
         chrome.storage.sync.set({ enable: G.enable });
-        chrome.action.setIcon({ path: G.enable ? "/assets/img/icon.png" : "/assets/img/icon-disable.png" });
+        // dev 模式工具栏图标加 DEV 标识，与生产版区分
+        chrome.action.setIcon({ path: process.env.NODE_ENV === "development"
+            ? (G.enable ? "/assets/img/icon-dev.png" : "/assets/img/icon-disable-dev.png")
+            : (G.enable ? "/assets/img/icon.png" : "/assets/img/icon-disable.png") });
         // SW 控制台打印嗅探总开关状态
         console.log(
             `%c[猫爪] 嗅探总开关已${G.enable ? "开启 ▶" : "暂停 ⏸"}`,
@@ -1005,7 +1008,10 @@ chrome.commands.onCommand.addListener(function (command) {
     } else if (command == "enable") {
         G.enable = !G.enable;
         chrome.storage.sync.set({ enable: G.enable });
-        chrome.action.setIcon({ path: G.enable ? "/assets/img/icon.png" : "/assets/img/icon-disable.png" });
+        // dev 模式工具栏图标加 DEV 标识，与生产版区分
+        chrome.action.setIcon({ path: process.env.NODE_ENV === "development"
+            ? (G.enable ? "/assets/img/icon-dev.png" : "/assets/img/icon-disable-dev.png")
+            : (G.enable ? "/assets/img/icon.png" : "/assets/img/icon-disable.png") });
         // SW 控制台打印快捷键切换的嗅探状态
         console.log(
             `%c[猫爪] 快捷键切换：嗅探已${G.enable ? "开启 ▶" : "暂停 ⏸"}`,

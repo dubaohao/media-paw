@@ -347,7 +347,10 @@ function InitOptions() {
             }
         });
 
-        chrome.action.setIcon({ path: G.enable ? "/assets/img/icon.png" : "/assets/img/icon-disable.png" });
+        // dev 模式工具栏图标加 DEV 标识，与生产版区分
+        chrome.action.setIcon({ path: process.env.NODE_ENV === "development"
+            ? (G.enable ? "/assets/img/icon-dev.png" : "/assets/img/icon-disable-dev.png")
+            : (G.enable ? "/assets/img/icon.png" : "/assets/img/icon-disable.png") });
         G.initSyncComplete = true;
     });
     // 读取local配置数据 交给全局变量G
