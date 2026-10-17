@@ -1,0 +1,99 @@
+{
+  "name": "media-paw",
+  "displayName": "猫爪",
+  "version": "1.0.0",
+  "description": "猫爪 - 浏览器媒体嗅探扩展",
+  "author": "dubaohao",
+  "scripts": {
+    "dev": "rm -rf build/chrome-mv3-dev; PLASMO_EXT_NAME=\"DEV ｜ 猫爪\" plasmo dev",
+    "build": "PLASMO_EXT_NAME=\"__MSG_catCatch__\" plasmo build",
+    "package": "PLASMO_EXT_NAME=\"__MSG_catCatch__\" plasmo package"
+  },
+  "dependencies": {
+    "hls.js": "^1.7.3",
+    "mpd-parser": "^1.4.0",
+    "mqtt": "^5.16.0",
+    "mux.js": "^6.3.0",
+    "plasmo": "0.89.2",
+    "qrcode.react": "^4.2.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "streamsaver": "^2.0.6"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.271",
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "typescript": "5.5.3"
+  },
+  "manifest": {
+    "name": "$PLASMO_EXT_NAME",
+    "description": "__MSG_description__",
+    "action": {
+      "default_title": "__MSG_catCatch__",
+      "default_popup": "sidepanel.html"
+    },
+    "minimum_chrome_version": "93",
+    "default_locale": "en",
+    "homepage_url": "https://github.com/dubaohao/media-paw",
+    "incognito": "split",
+    "permissions": [
+      "tabs",
+      "webRequest",
+      "downloads",
+      "storage",
+      "webNavigation",
+      "alarms",
+      "declarativeNetRequest",
+      "scripting",
+      "sidePanel"
+    ],
+    "host_permissions": [
+      "<all_urls>"
+    ],
+    "web_accessible_resources": [
+      {
+        "resources": [
+          "assets/img/*",
+          "assets/css/mobile.css",
+          "assets/catch-script/*.js"
+        ],
+        "matches": [
+          "<all_urls>"
+        ]
+      }
+    ],
+    "side_panel": {
+      "default_path": "sidepanel.html"
+    },
+    "options_ui": {
+      "page": "options.html",
+      "open_in_tab": true
+    },
+    "commands": {
+      "_execute_action": {},
+      "enable": {
+        "description": "__MSG_pause__ / __MSG_enable__"
+      },
+      "auto_down": {
+        "description": "__MSG_autoDownload__"
+      },
+      "catch": {
+        "description": "__MSG_cacheCapture__"
+      },
+      "m3u8": {
+        "description": "__MSG_m3u8Parser__"
+      },
+      "clear": {
+        "description": "__MSG_clear__"
+      },
+      "reboot": {
+        "description": "__MSG_restartExtension__"
+      },
+      "deepSearch": {
+        "description": "__MSG_deepSearch__"
+      }
+    }
+  }
+}

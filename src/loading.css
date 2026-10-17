@@ -1,0 +1,52 @@
+/*
+ * 页面加载占位样式（独立提取，随 HTML head 的 <link> 先行加载）
+ * 原理：React 挂载前 #__plasmo 为空，:empty 命中显示 loading；
+ *      React 首次渲染后容器非空，伪元素自动消失，无需 JS 参与
+ * 注意：此文件在运行时样式（public.css/sidepanel.css）注入前生效，
+ *      颜色值需与 public.css 主题变量保持一致，不可引用 CSS 变量
+ */
+
+html,
+body {
+  margin: 0;
+  background: #fff;
+}
+
+/* 空挂载点铺满视口并居中 spinner */
+#__plasmo:empty {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 旋转圆环动画（配色沿用主题蓝 #1a73e8） */
+#__plasmo:empty::before {
+  content: "";
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgb(26 115 232 / 18%);
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: cc-loading-spin 0.8s linear infinite;
+}
+
+@keyframes cc-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 暗色主题：背景与 spinner 配色同步切换（对齐 public.css 暗色变量） */
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    background: #0f172a;
+  }
+
+  #__plasmo:empty::before {
+    border-color: rgb(255 255 255 / 15%);
+    border-top-color: #4285f4;
+  }
+}

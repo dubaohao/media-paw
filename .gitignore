@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+
+# 构建产物
+build/
+dist/
+*.crx
+*.zip
+*.pem
+
+# Plasmo 生成产物（缓存与入口）
+.plasmo/
+
+# TypeScript 增量编译信息
+tsconfig.tsbuildinfo
+
+# 系统与日志
+.DS_Store
+*.log
+
+# IDE 本地配置
+.trae/
+.idea/
+.vscode/
