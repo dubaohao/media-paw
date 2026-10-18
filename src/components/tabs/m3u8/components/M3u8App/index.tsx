@@ -136,7 +136,7 @@ function TaskDetail() {
 
 /** 任务卡片：状态徽章 + 文件名 + 进度条 + 分片数；点击原地展开/收起详情 */
 function TaskCard({ task, expanded }: { task: any; expanded: boolean }) {
-  const { setActiveTaskId, closeTask, togglePauseTask } = useM3u8Store();
+  const { setActiveTaskId, closeTask, togglePauseTask, retryTask } = useM3u8Store();
   // 预览不自动播放：展开后视频停在首帧，由用户点播放器控件手动播（折叠时 InlinePreview 内部会暂停）
   const name =
     task.options.customFilename ||
@@ -158,7 +158,7 @@ function TaskCard({ task, expanded }: { task: any; expanded: boolean }) {
           <span className={`taskDot ${info.cls}`} />
           {info.text}
         </span>
-        {/* 头部操作区：暂停/继续（× 左侧，收起态直接可用） */}
+        {/* 头部操作区：暂停/继续、失败重试（× 左侧，收起态直接可用） */}
         <div className="taskCardOps">
           {pausable && (
             <button
@@ -170,6 +170,19 @@ function TaskCard({ task, expanded }: { task: any; expanded: boolean }) {
               }}
             >
               {task.state === "paused" ? "▶" : "⏸"}
+            </button>
+          )}
+          {/* 失败任务：一键重试（续传失败分片 / 重试保存 / 重新下载） */}
+          {task.state === "error" && (
+            <button
+              className="taskMiniBtn resume"
+              title={i18n.retryDownload}
+              onClick={e => {
+                e.stopPropagation();
+                retryTask(task.id);
+              }}
+            >
+              ↻
             </button>
           )}
           {/* 关闭任务 */}

@@ -196,6 +196,8 @@ interface StoreValue {
   retrySegment: (index: number) => void;
   /** 一键重试所有失败分片 */
   retryAllErrors: () => void;
+  /** 重试指定失败任务（卡片级）：续传失败分片 / 重试保存 / 重新完整下载 */
+  retryTask: (taskId: string) => void;
   /** 强制合并：跳过失败分片，用已下载完成的 buffer 合并输出 */
   forceMerge: () => void;
   /** 最终保存的文件名（含扩展名，与 mergeTs 计算逻辑一致） */
@@ -716,6 +718,20 @@ export function M3u8StoreProvider(props: {
           onSegmentError: (index, error) => {
             updateTaskSegment(task.id, index, { state: "error", error });
           },
+          // 全部分片到达终态但存在失败分片：allCompleted 不会触发，任务在此进入 error 终态
+          // （updateTask 拦截器自动回写嗅探记录 error → 侧边栏标红保留）
+          onFinishWithError: (failCount, success, total) => {
+            if (rt.fileStream) {
+              rt.fileStream.close();
+              rt.fileStream = undefined;
+            }
+            updateTask(task.id, {
+              state: "error",
+              tips: `${i18n.downloadFailed}（${i18n.segments || "分片"} ${failCount}/${total}）`
+            });
+            // 失败释放并发额度：启动排队中的下一个任务
+            dispatchRef.current?.();
+          },
           // 自动重试窗口内：分片回到下载中状态并展示重试次数，不标红
           onSegmentRetry: (index, retryCount, maxRetry) => {
             updateTaskSegment(task.id, index, {
@@ -1162,8 +1178,8 @@ export function M3u8StoreProvider(props: {
       if (!task || !down) {
         return;
       }
-      // 停止/完成状态下 downloader() 会直接返回，需先重置状态
-      if (down.state === "abort" || down.state === "done") {
+      // 停止/完成/失败状态下 downloader() 会直接返回，需先重置状态
+      if (down.state === "abort" || down.state === "done" || down.state === "error") {
         down.state = "waiting";
       }
       updateTaskSegment(task.id, index, {
@@ -1186,8 +1202,8 @@ export function M3u8StoreProvider(props: {
     if (!errorSegs.length) {
       return;
     }
-    // 停止/完成状态下 downloader() 会直接返回，需先重置状态
-    if (down.state === "abort" || down.state === "done") {
+    // 停止/完成/失败状态下 downloader() 会直接返回，需先重置状态
+    if (down.state === "abort" || down.state === "done" || down.state === "error") {
       down.state = "waiting";
     }
     updateTask(task.id, { state: "downloading" });
@@ -1199,6 +1215,65 @@ export function M3u8StoreProvider(props: {
       down.downloader(s.index);
     });
   }, [getActiveTask, updateTask, updateTaskSegment]);
+
+  /**
+   * 重试指定失败任务（卡片级入口，不依赖展开态）：
+   * 1. 有失败分片 → 续传，只重下失败分片（buffer 复用）
+   * 2. 分片全成但保存（落盘）失败 → buffer 仍在内存，直接重试保存
+   * 3. 其余（解析失败等无下载器场景）→ 重新完整下载
+   */
+  const retryTask = useCallback(
+    (taskId: string) => {
+      const task = tasksRef.current.find(t => t.id === taskId);
+      if (!task || task.state !== "error") {
+        return;
+      }
+      const rt = task.runtime;
+      const down = rt.down;
+      const errorSegs = task.segments.filter(s => s.state === "error");
+      if (down && errorSegs.length) {
+        // 续传失败分片（downloader 处于 abort/done/error 终态时 downloader() 直接返回，需先重置）
+        if (down.state === "abort" || down.state === "done" || down.state === "error") {
+          down.state = "waiting";
+        }
+        // 流式模式：失败终态时 fileStream 已关闭，续传前重建
+        if (task.options?.streamSaver && !rt.fileStream && task.playlist?.fragments?.length) {
+          rt.fileStream = createStreamSaver(
+            task.playlist.fragments[0].url,
+            task.options.mp4
+          );
+        }
+        updateTask(task.id, { state: "downloading", tips: "" });
+        errorSegs.forEach(s => {
+          updateTaskSegment(task.id, s.index, {
+            state: "downloading",
+            error: undefined
+          });
+          down.downloader(s.index);
+        });
+        return;
+      }
+      if (down && rt.ctx) {
+        // 分片全部成功、保存失败：buffer 仍在内存，直接重试保存
+        updateTask(task.id, { state: "merging", tips: "" });
+        mergeTs(down, rt.ctx, task.options, undefined, (ok, error) => {
+          if (ok) {
+            updateTask(task.id, { state: "complete" });
+          } else {
+            updateTask(task.id, {
+              state: "error",
+              tips: `${i18n.saveFailed || "保存失败"}：${error || "unknown"}`
+            });
+          }
+          dispatchRef.current?.();
+        });
+        return;
+      }
+      // 兜底：重新完整下载
+      startTaskDownload(task);
+    },
+    [startTaskDownload, updateTask, updateTaskSegment]
+  );
 
   /**
    * 强制合并当前任务：跳过失败分片，用已下载完成的 buffer 合并输出
@@ -1311,6 +1386,7 @@ export function M3u8StoreProvider(props: {
     closeAllTasks,
     retrySegment,
     retryAllErrors,
+    retryTask,
     forceMerge,
     displayFileName: activeTask ? computeFileName(activeTask) : "",
     setKeyInfo,

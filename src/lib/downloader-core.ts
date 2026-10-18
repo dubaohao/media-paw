@@ -375,6 +375,15 @@ export class Downloader {
                 // 顺序下载：下载下一个切片
                 if (!directDownload && this.index < this.fragments.length) {
                     this.downloader()
+                } else if (
+                    this.running === 0 &&
+                    this.index >= this.fragments.length &&
+                    this.errorList.size > 0
+                ) {
+                    // 全部分片已到达终态但存在失败分片：allCompleted 不会触发（success < total），
+                    // 需要任务级失败终态事件，否则任务永久卡在 downloading
+                    this.state = 'error'
+                    this.emit('finishWithError', this.errorList, this.success, this.fragments.length)
                 }
             })
     }

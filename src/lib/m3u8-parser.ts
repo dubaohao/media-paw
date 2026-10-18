@@ -1326,6 +1326,8 @@ export async function downloadM3u8(
     /** 分片失败但仍在自动重试窗口内：retryCount=第几次重试，maxRetry=上限 */
     onSegmentRetry?: (index: number, retryCount: number, maxRetry: number, error: string) => void;
     onAllCompleted?: (buffer: ArrayBuffer[]) => void;
+    /** 全部分片到达终态但存在失败分片（allCompleted 不触发的兜底终态）：failCount=失败分片数 */
+    onFinishWithError?: (failCount: number, success: number, total: number) => void;
     onMergeStart?: () => void;
     onStreamWrite?: (buffer: ArrayBuffer) => void;
     onProgress?: (success: number, total: number, buffersize: number, duration: number) => void;
@@ -1437,6 +1439,11 @@ export async function downloadM3u8(
   // 分片自动重试（尚未标记失败）：通知 UI 显示「重试 n/max」
   down.on("segmentRetry", function (fragment: Fragment, retryCount: number, maxRetry: number, error: any) {
     callbacks.onSegmentRetry?.(fragment.index, retryCount, maxRetry, String(error));
+  });
+
+  // 全部分片到达终态但存在失败分片：任务级失败终态（allCompleted 不会触发）
+  down.on("finishWithError", function (errorList: Set<Fragment>, success: number, total: number) {
+    callbacks.onFinishWithError?.(errorList.size, success, total);
   });
 
   // 下载错误（自动重试耗尽后的最终失败）
