@@ -7,6 +7,7 @@ import React from "react"
 import { G, i18n } from "~lib/init"
 import { useMediaStore } from "~sidepanel/store"
 import { sendMessage } from "~components/shared/api"
+import { showTips } from "~components/shared/toast-bus"
 
 interface Props {
   /** 密钥浮层是否展开 */
@@ -23,7 +24,7 @@ interface Props {
 
 /** 顶部导航栏 */
 export function TopBar({ keysOpen, onToggleKeys, sideMode, showCurrentPage, sideType }: Props) {
-  const { current, other, keys, buttonState, updateButton } = useMediaStore()
+  const { current, other, keys, buttonState, updateButton, syncData } = useMediaStore()
 
   const total = current.size + other.size
 
@@ -107,6 +108,15 @@ export function TopBar({ keysOpen, onToggleKeys, sideMode, showCurrentPage, side
             ⧉
           </button>
         )}
+        {/* 手动同步：与 background 数据不一致时点击，重新拉全量强制对账 */}
+        <button
+          id="syncData"
+          className="tbtn"
+          title={i18n.syncData || "同步数据"}
+          onClick={() => { syncData(); showTips(i18n.syncDone || "已同步") }}
+        >
+          ⟳
+        </button>
         <button
           id="Options"
           className="tbtn"

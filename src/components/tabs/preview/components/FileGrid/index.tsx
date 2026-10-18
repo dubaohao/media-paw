@@ -7,7 +7,7 @@ import React from "react"
 import { i18n } from "~lib/init"
 import { usePreviewStore } from "~components/tabs/preview/store"
 import { FileCard } from "./FileCard"
-import s from "~components/tabs/preview/preview.module.css"
+import s from "../../preview.module.css"
 
 /** 文件列表网格组件 */
 export function FileGrid() {

@@ -6,7 +6,7 @@
 import React, { useState } from "react"
 import { G, i18n } from "~lib/init"
 import { usePreviewStore } from "~components/tabs/preview/store"
-import s from "~components/tabs/preview/preview.module.css"
+import s from "../../preview.module.css"
 
 /** 筛选条件栏组件 */
 export function FilterBar() {

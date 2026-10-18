@@ -10,7 +10,7 @@
  *   - 每任务一张卡片：状态徽章 / 文件名 / 进度条 / 分片数 / 关闭
  *   - 点击卡片原地展开详情（信息卡 / 密钥 / 进度网格 / 操作按钮），再点收起
  */
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { i18n, G } from "~lib/init";
 import { useM3u8Store } from "~components/tabs/m3u8/store";
 import { byteToSize } from "~lib/function";
@@ -18,6 +18,7 @@ import { M3u8CustomForm } from "./components/M3u8CustomForm";
 import { AesDecryptorPanel } from "./components/AesDecryptorPanel";
 import { M3u8DownloadList } from "./components/M3u8DownloadList";
 import { M3u8Tools } from "./components/M3u8Tools";
+import { InlinePreview } from "~components/shared/InlinePreview";
 
 /** 任务状态筛选键 */
 type TaskFilter = "all" | "downloading" | "complete" | "error";
@@ -136,6 +137,7 @@ function TaskDetail() {
 /** 任务卡片：状态徽章 + 文件名 + 进度条 + 分片数；点击原地展开/收起详情 */
 function TaskCard({ task, expanded }: { task: any; expanded: boolean }) {
   const { setActiveTaskId, closeTask, togglePauseTask } = useM3u8Store();
+  // 预览不自动播放：展开后视频停在首帧，由用户点播放器控件手动播（折叠时 InlinePreview 内部会暂停）
   const name =
     task.options.customFilename ||
     task.fileName ||
@@ -215,6 +217,15 @@ function TaskCard({ task, expanded }: { task: any; expanded: boolean }) {
       {/* 原地展开的详情区（阻断点击冒泡：内部交互不触发卡片收起） */}
       {expanded && (
         <div className="taskCardDetail" onClick={e => e.stopPropagation()}>
+          {/* 原始 m3u8 在线预览（复用侧边栏 InlinePreview，hls.js 播放，默认暂停） */}
+          <InlinePreview
+            data={{
+              url: task.url,
+              requestHeaders: task.requestHeaders,
+              ext: "m3u8"
+            } as any}
+            active={expanded}
+          />
           <TaskDetail />
         </div>
       )}
@@ -224,10 +235,23 @@ function TaskCard({ task, expanded }: { task: any; expanded: boolean }) {
 
 /** 任务列表视图：「+」手动添加 + 状态筛选 chips + 「全部停止」 + 任务卡片（新任务在上） */
 function TaskListView() {
-  const { tasks, activeTaskId, stopAllDownload, closeAllTasks } = useM3u8Store();
+  const { tasks, activeTaskId, stopAllDownload, closeAllTasks, syncTasks } = useM3u8Store();
   const [filter, setFilter] = useState<TaskFilter>("all");
   /** 手动解析表单展开态（右上角「+」切换） */
   const [showForm, setShowForm] = useState(false);
+  /** 同步中标记（防连点） */
+  const [syncing, setSyncing] = useState(false);
+
+  /** 手动同步：从 background 补齐未关联任务的嗅探记录 */
+  const handleSync = async () => {
+    if (syncing) { return; }
+    setSyncing(true);
+    try {
+      await syncTasks();
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // 有新任务加入（手动解析提交/侧边栏追加）后自动收起表单
   React.useEffect(() => {
@@ -278,6 +302,15 @@ function TaskListView() {
           ))}
         </div>
         <div className="taskToolBtns">
+          {/* 手动同步：与嗅探数据不一致时点击，从 background 补齐缺失任务 */}
+          <button
+            className="button syncBtn"
+            title={i18n.syncData || "同步数据"}
+            disabled={syncing}
+            onClick={handleSync}
+          >
+            {syncing ? "…" : "⟳"} {i18n.syncData || "同步"}
+          </button>
           {hasRunning && (
             <button className="button stopAllBtn" onClick={stopAllDownload}>
               {i18n.stopAll}

@@ -926,6 +926,11 @@ body.body-side .topStack {
 .panel.dl.dl-error::before {
     background: #ef4444;
 }
+/* 记录级失败（下载中断后保留在列表）：无下载态进度条时整行淡红标出 */
+.panel.dl-error:not(.dl) {
+    background: rgb(239 68 68 / 8%);
+    box-shadow: inset 3px 0 0 #ef4444;
+}
 /* 状态徽章（下载中=紫） */
 .panel .dlBadge {
     flex-shrink: 0;

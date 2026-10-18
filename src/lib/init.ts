@@ -258,6 +258,20 @@ export const cacheDataReady: Promise<void> = new Promise(function (resolve) {
             cacheData = {};
         } else {
             cacheData = items.MediaData;
+            // SW 重启恢复：恢复期间进行中的下载任务已随 SW 进程死亡，
+            // 残留的 downloading/merging 状态全部重置回 none（未完成），让用户可重新下载
+            let stateFixed = false;
+            for (const tabId in cacheData) {
+                for (const item of cacheData[tabId] ?? []) {
+                    if (item && (item.state === "downloading" || item.state === "merging")) {
+                        item.state = "none";
+                        stateFixed = true;
+                    }
+                }
+            }
+            if (stateFixed) {
+                (chrome.storage.session ?? chrome.storage.local).set({ MediaData: cacheData });
+            }
         }
         resolve();
         // 仅 background SW 广播（init 也会被其他扩展页面导入，避免重复广播触发多余对账）

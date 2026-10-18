@@ -20,6 +20,7 @@ import React, {
 } from "react";
 import { G, i18n } from "~lib/init";
 import { sendMessage } from "~components/shared/api";
+import { isM3U8 } from "~components/shared/format";
 import {
   AESDecryptor,
   createStreamSaver,
@@ -56,6 +57,14 @@ export type DownloadState =
 
 /** 任务级并发上限：同时下载的任务数，超出自动排队（终态后依次启动 queued 任务） */
 const MAX_PARALLEL_TASKS = 20;
+
+/** 任务状态 → 嗅探记录下载状态映射（updateTask 中回写 background 用） */
+const TASK_TO_MEDIA_STATE: Record<string, string> = {
+  downloading: "downloading",
+  merging: "merging",
+  complete: "done",
+  error: "error"
+};
 
 /** 任务进度聚合 */
 interface TaskProgress {
@@ -154,6 +163,8 @@ interface StoreValue {
   setActiveTaskId: (id: string) => void;
   /** 追加任务并自动解析（m3u8AddTask 消息入口），返回任务 id */
   addTask: (params: TaskParams) => Promise<string>;
+  /** 手动同步：从 background 补齐未关联任务的 m3u8 记录，返回补齐数 */
+  syncTasks: () => Promise<number>;
   /** 关闭并移除任务（下载中先停止，同时移除其请求头规则） */
   closeTask: (id: string) => void;
   /** 清空：停止并关闭全部任务（不联动侧边栏） */
@@ -370,11 +381,25 @@ export function M3u8StoreProvider(props: {
         | ((t: M3u8Task) => Partial<M3u8Task>)
     ) => {
       setTasks(prev =>
-        prev.map(t =>
-          t.id === id
-            ? { ...t, ...(typeof patch === "function" ? patch(t) : patch) }
-            : t
-        )
+        prev.map(t => {
+          if (t.id !== id) { return t }
+          const p = typeof patch === "function" ? patch(t) : patch
+          // 任务状态变化时回写嗅探记录的下载状态（background 持久化 + 广播，驱动侧边栏待办队列）
+          if (p.state && p.state !== t.state && t.tabId != null && t.requestId) {
+            const mapped = TASK_TO_MEDIA_STATE[p.state]
+            if (mapped) {
+              try {
+                chrome.runtime.sendMessage({
+                  Message: "mediaStateChange",
+                  tabId: t.tabId,
+                  requestId: t.requestId,
+                  state: mapped
+                })
+              } catch { /* SW 未就绪时忽略 */ }
+            }
+          }
+          return { ...t, ...p }
+        })
       );
     },
     []
@@ -710,12 +735,23 @@ export function M3u8StoreProvider(props: {
                 type: "complete",
                 requestId: task.requestId ?? undefined
               });
+              // 释放并发额度：启动排队中的下一个任务
+              dispatchRef.current?.();
             } else {
-              mergeTs(down, ctx, options);
-              updateTask(task.id, { state: "complete" });
+              // 以浏览器真实落盘终态为准：成功 → complete；失败 → error（buffer 保留，可重试保存/重下）
+              mergeTs(down, ctx, options, undefined, (ok, error) => {
+                if (ok) {
+                  updateTask(task.id, { state: "complete" });
+                } else {
+                  updateTask(task.id, {
+                    state: "error",
+                    tips: `${i18n.saveFailed || "保存失败"}：${error || "unknown"}`
+                  });
+                }
+                // 释放并发额度：启动排队中的下一个任务
+                dispatchRef.current?.();
+              });
             }
-            // 释放并发额度：启动排队中的下一个任务
-            dispatchRef.current?.();
           },
           onProgress: (success, total, buffersize, duration) => {
             updateTask(task.id, {
@@ -826,7 +862,7 @@ export function M3u8StoreProvider(props: {
         autoClose
       });
       setTasks([task]);
-      setActiveTaskId(task.id);
+      // 不默认展开任务详情：新任务以折叠卡片入列，用户点击卡片再展开
       parseTaskUrl(task, url);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -835,13 +871,15 @@ export function M3u8StoreProvider(props: {
   /** 追加任务并自动解析（m3u8AddTask 消息入口），返回任务 id */
   const addTask = useCallback(
     async (params: TaskParams): Promise<string> => {
+      // 防重：同 requestId（同一嗅探记录）或同 URL 的现存任务 → 忽略推送，直接返回已有任务
+      const dup = tasksRef.current.find(t =>
+        (params?.requestId != null && t.requestId != null && String(t.requestId) === String(params.requestId)) ||
+        (params?.url && t.url && t.url === params.url)
+      );
+      if (dup) { return dup.id; }
       const task = createTask(params ?? {});
       setTasks(prev => [...prev, task]);
-      // 首个任务直接进入详情视图（保持单任务打开即见详情的体验）；
-      // 追加任务不切换视图：停留当前页面（列表/正在查看的任务详情），由用户自行点选
-      if (tasksRef.current.length === 0) {
-        setActiveTaskId(task.id);
-      }
+      // 不默认展开任务详情（含首个任务）：统一折叠，由用户点击卡片展开
       if (task.url) {
         parseTaskUrl(task, task.url);
       } else {
@@ -851,6 +889,40 @@ export function M3u8StoreProvider(props: {
     },
     [createTask, parseTaskUrl, updateTask]
   );
+
+  /**
+   * 手动同步：拉 background cacheData 全量，把尚未关联任务的 m3u8 嗅探记录补为新任务
+   * （不自动下载，仅解析播放列表），返回补齐的任务数；两端数据不一致时兜底
+   */
+  const syncTasks = useCallback(async (): Promise<number> => {
+    let data: any = null;
+    try {
+      data = await sendMessage({ Message: "getAllData" });
+    } catch { /* SW 未就绪 */ }
+    if (!data) { return 0; }
+    let added = 0;
+    for (const tabId of Object.keys(data)) {
+      const list = data[tabId];
+      if (!Array.isArray(list)) { continue; }
+      for (const item of list) {
+        if (!item?.requestId || !item?.url) { continue; }
+        // 只补 m3u8 类型记录（本页只处理 m3u8）
+        if (!isM3U8(item)) { continue; }
+        // 已有同 requestId 的任务则跳过
+        if (tasksRef.current.some(t => t.requestId && String(t.requestId) === String(item.requestId))) { continue; }
+        added++;
+        addTask({
+          url: item.url,
+          requestHeaders: item.requestHeaders,
+          requestId: String(item.requestId),
+          title: item.title,
+          fileName: item.title,
+          tabId: Number(tabId)
+        });
+      }
+    }
+    return added;
+  }, [addTask]);
 
   /** 监听 popup 的追加任务消息 */
   useEffect(() => {
@@ -885,7 +957,6 @@ export function M3u8StoreProvider(props: {
         tabId: pageTabIdRef.current ?? undefined
       });
       setTasks(prev => [...prev, task]);
-      setActiveTaskId(task.id);
       await parseTaskUrl(task, m3u8Url);
     },
     [createTask, parseTaskUrl]
@@ -896,7 +967,6 @@ export function M3u8StoreProvider(props: {
     async (text: string, baseUrlVal: string = "") => {
       const task = createTask({});
       setTasks(prev => [...prev, task]);
-      setActiveTaskId(task.id);
       await parseTaskText(task, text, baseUrlVal);
     },
     [createTask, parseTaskText]
@@ -929,10 +999,9 @@ export function M3u8StoreProvider(props: {
       }
       // 函数式 updater：监听器一次关闭多个任务时基于最新列表过滤，互不覆盖
       setTasks(prev => prev.filter(t => t.id !== id));
-      // 当前查看的任务被关闭时切到最后一个任务
+      // 当前展开的任务被关闭时收起详情（不自动展开其他任务）
       if (activeTaskIdRef.current === id) {
-        const rest = tasksRef.current.filter(t => t.id !== id);
-        setActiveTaskId(rest[rest.length - 1]?.id ?? null);
+        setActiveTaskId(null);
       }
       // 关闭进行中任务释放并发额度：启动排队中的下一个任务
       if (task?.state === "downloading" || task?.state === "merging") {
@@ -1214,6 +1283,7 @@ export function M3u8StoreProvider(props: {
     activeTaskId,
     setActiveTaskId,
     addTask,
+    syncTasks,
     closeTask,
     playlist: activeTask?.playlist ?? null,
     segments: activeTask?.segments ?? [],

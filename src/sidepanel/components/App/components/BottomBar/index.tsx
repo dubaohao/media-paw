@@ -39,7 +39,7 @@ function mergeable(data: MediaResource): boolean {
 
 /**
  * 收纳档位：底栏宽度映射为「从队尾收进菜单的按钮数量」
- * 0=全平铺；2=收清空+删重名；3=再收删除已下载；4=再收在线合并；5=全收（仅剩下载+⋯）；
+ * 0=全平铺；2=收清空+删重名；3=再收在线合并；4=再收全选（仅剩下载+⋯）；
  * 🧰/🎛 始终平铺在最右，不参与折行
  */
 function toTier(width: number): number {
@@ -56,25 +56,25 @@ export const BottomBar = forwardRef<HTMLDivElement, Props>(
     const {
       current,
       other,
-      progress,
       getChecked,
       setCheckedAll,
       dedupe,
       clearAll,
-      removeDownloaded,
       buttonState
     } = useMediaStore()
     const checkedData = getChecked()
     /** 非 media 视图时隐藏列表相关操作按钮 */
     const listOnly = view === "media" ? "" : " hide"
 
-    /** 可见资源总数（hidden 资源 display:none，不计入全选范围） */
-    let visibleTotal = 0
-    for (const item of current.values()) { if (!item.hidden) { visibleTotal++ } }
-    for (const item of other.values()) { if (!item.hidden) { visibleTotal++ } }
-    /** 全选状态：可见资源全部被勾选 */
+    /** 可勾选资源数（可见 且 非下载中/合并中；busy 记录勾选框禁用，不参与全选） */
+    let selectableTotal = 0
+    const isSelectable = (item: MediaResource) =>
+      !item.hidden && item.state !== "downloading" && item.state !== "merging"
+    for (const item of current.values()) { if (isSelectable(item)) { selectableTotal++ } }
+    for (const item of other.values()) { if (isSelectable(item)) { selectableTotal++ } }
+    /** 全选状态：可勾选资源全部被勾选（getChecked 已过滤 busy 记录） */
     const allSelected =
-      checkedData.length > 0 && checkedData.length === visibleTotal
+      selectableTotal > 0 && checkedData.length === selectableTotal
 
     /** 在线合并可用性：恰好两条、体积受限（Firefox 不限）、均为媒体或 m3u8 */
     const maxSize = Math.max(0, ...checkedData.map(d => d._size ?? 0))
@@ -107,15 +107,6 @@ export const BottomBar = forwardRef<HTMLDivElement, Props>(
       downloadChecked(checkedData)
     }
 
-    /** 已下载完成的资源数（删除已下载按钮的可用性判断） */
-    let downloadedCount = 0
-    for (const [rid, item] of current) {
-      if (!item.hidden && progress.get(rid)?.phase === "complete") { downloadedCount++ }
-    }
-    for (const [rid, item] of other) {
-      if (!item.hidden && progress.get(rid)?.phase === "complete") { downloadedCount++ }
-    }
-
     /**
      * 批量操作按钮配置：按重要性从高到低排列（均作用于当前页+其他页整个列表）
      * 空间不足时从队尾（清空）开始依次收进 ⋯ 菜单
@@ -132,12 +123,6 @@ export const BottomBar = forwardRef<HTMLDivElement, Props>(
         label: i18n.onlineMerge,
         run: () => mergeDownload(checkedData),
         disabled: !canMerge
-      },
-      {
-        id: "removeDownloaded",
-        label: i18n.deleteDownloaded,
-        run: removeDownloaded,
-        disabled: downloadedCount === 0
       },
       { id: "dedupe", label: i18n.deleteDuplicateFilenames, run: dedupe },
       { id: "clear", label: i18n.clear, run: clearAll, danger: true }

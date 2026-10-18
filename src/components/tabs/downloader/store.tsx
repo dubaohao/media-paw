@@ -240,6 +240,16 @@ export function DownloaderStoreProvider(props: { children: React.ReactNode }) {
         setTick(t => t + 1)
     }, [])
 
+    /** 回写嗅探记录的下载状态到 background（持久化 + 广播，驱动侧边栏待办队列） */
+    const reportMediaState = useCallback((state: string) => {
+        const tabId = configRef.current.tabId
+        const requestId = downRef.current?.fragments?.[0]?.requestId
+        if (tabId == null || !requestId) { return }
+        try {
+            chrome.runtime.sendMessage({ Message: "mediaStateChange", tabId, requestId, state })
+        } catch { /* SW 未就绪时忽略 */ }
+    }, [])
+
     /** 更新标签页标题：文件名前缀 + 进度文本，便于多个下载标签页相互区分 */
     const setDocTitle = useCallback((progressText: string) => {
         document.title = fileTitleRef.current
@@ -332,6 +342,8 @@ export function DownloaderStoreProvider(props: { children: React.ReactNode }) {
             setDownState("done")
             setRunning(0)
             touchTick()
+            // 全部成功 → done；存在失败分片 → error（标红保留在侧边栏，可重试）
+            reportMediaState(down.success === down.total ? "done" : "error")
             // 流式下载（全部 fileStream）无需走 chrome.downloads，直接广播完成
             // 注意：条件为「所有分片均为 fileStream」，与 onChanged 的非流式广播路径互斥
             if (down.fragments.every((item: any) => item.fileStream && fragmentsWork.current.find(v => v.index === item.index)?.state === "success")) {
@@ -405,7 +417,7 @@ export function DownloaderStoreProvider(props: { children: React.ReactNode }) {
             updateView(fragment.index, { state: "stopped" })
             setRunning(down.running)
         })
-    }, [autoClose, updateProgress, updateView, touchTick, setDocTitle])
+    }, [autoClose, updateProgress, updateView, touchTick, setDocTitle, reportMediaState])
 
     /** 初始化下载器并启动下载 */
     const startWithData = useCallback((
@@ -457,9 +469,10 @@ export function DownloaderStoreProvider(props: { children: React.ReactNode }) {
         setFileTitle(pageFileName)
 
         // 启动下载
+        reportMediaState("downloading")
         down.start()
         setDocTitle(`${down.success}/${down.total}`)
-    }, [bindEvents, commitFragments, setDocTitle])
+    }, [bindEvents, commitFragments, setDocTitle, reportMediaState])
 
     /** 仅启动下载（已初始化过） */
     const start = useCallback(() => {

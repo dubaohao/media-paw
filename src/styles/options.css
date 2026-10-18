@@ -812,6 +812,15 @@ a.json-placeholder:hover {
   padding-top: 10px;
   border-top: 1px dashed rgba(128, 128, 128, 0.35);
 }
+/* 任务卡片展开区的 m3u8 预览播放器（复用侧边栏 InlinePreview 的 #preview id） */
+.taskCardDetail #preview {
+  max-height: 300px;
+  max-width: 100%;
+  width: 100%;
+  border-radius: 8px;
+  background: #000;
+  margin-bottom: 10px;
+}
 .taskDetailLoading {
   text-align: center;
   opacity: 0.6;

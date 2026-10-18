@@ -67,8 +67,8 @@ interface StoreValue {
   soloTargets: string[] | null
   /** 删除单条资源（前端列表 + background 缓存） */
   removeMedia: (rid: string, isCurrent: boolean) => void
-  /** 删除已下载完成的资源（progress.phase === "complete"，作用于整个列表） */
-  removeDownloaded: () => void
+  /** 手动同步：重新从 background 拉全量 cacheData 强制对账（两端数据不一致时兜底） */
+  syncData: () => void
   blockedSite: boolean
   skipped: boolean
   buttonState: Record<string, boolean>
@@ -134,7 +134,9 @@ function normalize(data: MediaResource, checked: boolean): MediaResource {
     data.parsing = "json"
   }
   data.isPlay = isPlayable(data)
-  data.checked = checked
+  // 下载中/合并中的记录不可勾选：强制未选中，避免批量下载重复发起
+  const busy = data.state === "downloading" || data.state === "merging"
+  data.checked = busy ? false : checked
   data.expanded = false
   // 页面 DOM 通过 getter 暴露给文件名模板（find 选择器函数）
   Object.defineProperty(data, "pageDOM", {
@@ -202,6 +204,8 @@ export function MediaStoreProvider(props: {
   regexRef.current = regex
   const checkboxRef = useRef(checkboxState)
   checkboxRef.current = checkboxState
+  /** 已上报过 downloading 状态的 requestId 集合（避免进度回调重复回写） */
+  const stateSentRef = useRef<Set<string>>(new Set())
 
   /** 按当前筛选条件计算资源是否隐藏 */
   const computeHidden = useCallback((data: MediaResource): boolean => {
@@ -231,6 +235,8 @@ export function MediaStoreProvider(props: {
           if (item.url === raw.url) { return null }
         }
       }
+      // 待办队列语义：已下载完成（done）的记录不入侧边栏列表（下载页保留全量历史）
+      if ((raw as any).state === "done") { return null }
       let rid = String(raw.requestId)
       if (work.has(rid)) {
         rid = rid + "_" + Date.now()
@@ -349,6 +355,16 @@ export function MediaStoreProvider(props: {
               if (writeMedia(raw, next)) { changed = true }
               continue
             }
+            // 记录下载状态以 background 为准：done → 从列表移除（待办队列语义）；其余状态（error 等）写回
+            if ((raw as any).state !== (exist as any).state) {
+              if ((raw as any).state === "done") {
+                next.delete(rid)
+              } else {
+                next.set(rid, { ...exist, state: (raw as any).state })
+              }
+              changed = true
+              continue
+            }
             // 已有：标题或锁定状态以 background 为准（用户行内改名会先写回 background，不冲突）
             if (exist._title !== raw.title || !!exist.titleLocked !== !!raw.titleLocked) {
               const merged = normalize({ ...raw }, exist.checked ?? false)
@@ -455,6 +471,31 @@ export function MediaStoreProvider(props: {
         if (nextCurrent) { commitCurrent(nextCurrent) }
         const nextOther = dropFrom(otherWork.current)
         if (nextOther) { commitOther(nextOther) }
+        return
+      }
+      // 下载状态同步（background 广播）：done → 从列表移除（待办队列语义）；其余状态写回记录（error 标红）
+      if (msg.Message == "mediaStateChanged" && msg.requestId != null) {
+        const rid = String(msg.requestId)
+        const applyState = (
+          work: Map<string, MediaResource>,
+          commit: (m: Map<string, MediaResource>) => void
+        ) => {
+          if (!work.has(rid)) { return }
+          const next = new Map(work)
+          if (msg.state === "done") {
+            next.delete(rid)
+          } else if (msg.state === "downloading" || msg.state === "merging") {
+            const item = next.get(rid)!
+            // 状态变为进行中时同步取消勾选，防止批量下载重复发起
+            next.set(rid, { ...item, state: msg.state, checked: false })
+          } else {
+            const item = next.get(rid)!
+            next.set(rid, { ...item, state: msg.state })
+          }
+          commit(next)
+        }
+        applyState(currentWork.current, commitCurrent)
+        applyState(otherWork.current, commitOther)
         return
       }
       if (msg.Message == "downloadProgress" && msg.requestId) {
@@ -639,6 +680,18 @@ export function MediaStoreProvider(props: {
         const received = item.bytesReceived?.current ?? 0
         const total = item.totalBytes?.current ?? 0
         const state = item.state?.current
+        // 下载状态回写 background（持久化到记录，驱动待办队列过滤与多端同步）
+        if (data.tabId != null && data.requestId != null) {
+          if (state === "complete") {
+            sendMessage({ Message: "mediaStateChange", tabId: data.tabId, requestId: data.requestId, state: "done" })
+          } else if (state === "interrupted") {
+            sendMessage({ Message: "mediaStateChange", tabId: data.tabId, requestId: data.requestId, state: "error" })
+          } else if (!stateSentRef.current.has(data.requestId)) {
+            // 首次见到该任务的进度回调 → 标记下载中
+            stateSentRef.current.add(data.requestId)
+            sendMessage({ Message: "mediaStateChange", tabId: data.tabId, requestId: data.requestId, state: "downloading" })
+          }
+        }
         setProgress(prev => {
           const cur =
             prev.get(data.requestId) ??
@@ -696,11 +749,12 @@ export function MediaStoreProvider(props: {
     })
   }, [addMediaList, tabId])
 
-  /** 勾选/取消单行 */
+  /** 勾选/取消单行（下载中/合并中的记录禁用勾选，避免批量下载重复发起） */
   const toggleCheck = useCallback((rid: string, isCurrent: boolean) => {
     const work = isCurrent ? currentWork.current : otherWork.current
     const item = work.get(rid)
     if (!item) { return }
+    if (item.state === "downloading" || item.state === "merging") { return }
     const next = new Map(work)
     next.set(rid, { ...item, checked: !item.checked })
     if (isCurrent) { commitCurrent(next) } else { commitOther(next) }
@@ -715,6 +769,8 @@ export function MediaStoreProvider(props: {
         const next = new Map(work)
         for (const [rid, item] of next) {
           if (item.hidden) { continue }
+          // 下载中/合并中的记录不参与批量勾选
+          if (item.state === "downloading" || item.state === "merging") { continue }
           next.set(rid, {
             ...item,
             checked: checked === "invert" ? !item.checked : checked
@@ -792,14 +848,14 @@ export function MediaStoreProvider(props: {
     [commitCurrent, commitOther]
   )
 
-  /** 获取全部勾选资源（当前页+其他页合并） */
+  /** 获取全部勾选资源（当前页+其他页合并；busy 记录强制排除，防止重复下载） */
   const getChecked = useCallback((): MediaResource[] => {
     const list: MediaResource[] = []
     for (const item of currentRef.current.values()) {
-      if (item.checked) { list.push(item) }
+      if (item.checked && item.state !== "downloading" && item.state !== "merging") { list.push(item) }
     }
     for (const item of otherRef.current.values()) {
-      if (item.checked) { list.push(item) }
+      if (item.checked && item.state !== "downloading" && item.state !== "merging") { list.push(item) }
     }
     return list
   }, [])
@@ -1005,24 +1061,6 @@ export function MediaStoreProvider(props: {
     if (isCurrent) { commitCurrent(next) } else { commitOther(next) }
   }, [commitCurrent, commitOther])
 
-  /**
-   * 删除已下载完成的资源（progress.phase === "complete"，覆盖猫抓下载与
-   * 普通浏览器下载两类）：前端列表与 background 缓存同步移除，作用于整个列表
-   */
-  const removeDownloaded = useCallback(() => {
-    const build = (work: Map<string, MediaResource>) => {
-      const next = new Map(work)
-      for (const [rid, item] of next) {
-        if (progress.get(rid)?.phase !== "complete") { continue }
-        sendMessage({ Message: "deleteMedia", tabId: item.tabId, requestId: rid })
-        next.delete(rid)
-      }
-      return next
-    }
-    commitCurrent(build(currentWork.current))
-    commitOther(build(otherWork.current))
-  }, [progress, commitCurrent, commitOther])
-
   const value: StoreValue = {
     ready: true,
     sideMode: tabId != null,
@@ -1052,7 +1090,7 @@ export function MediaStoreProvider(props: {
     soloExts,
     soloTargets,
     removeMedia,
-    removeDownloaded,
+    syncData: () => reconcileAll(),
     blockedSite,
     skipped,
     buttonState,

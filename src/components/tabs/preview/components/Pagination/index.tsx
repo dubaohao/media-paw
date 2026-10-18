@@ -6,7 +6,7 @@
 import React from "react"
 import { i18n } from "~lib/init"
 import { usePreviewStore } from "~components/tabs/preview/store"
-import s from "~components/tabs/preview/preview.module.css"
+import s from "../../preview.module.css"
 
 /** 分页控件组件 */
 export function Pagination() {

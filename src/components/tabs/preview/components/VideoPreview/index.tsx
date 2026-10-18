@@ -8,7 +8,7 @@ import Hls from "hls.js"
 import { i18n } from "~lib/init"
 import { isM3U8 } from "~components/shared/format"
 import { usePreviewStore } from "~components/tabs/preview/store"
-import s from "~components/tabs/preview/preview.module.css"
+import s from "../../preview.module.css"
 
 /** 视频/图片预览浮层组件 */
 export function VideoPreview() {

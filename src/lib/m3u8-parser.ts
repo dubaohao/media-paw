@@ -1522,7 +1522,9 @@ export function mergeTs(
   down: M3u8Downloader,
   ctx: DownloadContext,
   options: DownloadOptions,
-  fileStream?: any
+  fileStream?: any,
+  /** 落盘终态回调（仅本页直接保存路径；ffmpeg 接管路径不落此回调）：成功后才销毁 down 释放 buffer */
+  onSettled?: (ok: boolean, error?: string) => void
 ): void {
   // 强制合并（跳过失败分片）场景：buffer 中失败/未下载分片为空洞，
   // Blob 会把空洞序列化成 "undefined" 字符串写入文件，必须先过滤
@@ -1561,8 +1563,10 @@ export function mergeTs(
 
   if (options.ffmpeg || ctx.ffmpegAction || ctx.isSendFfmpeg) {
     if (!G.isFirefox && fileBlob.size > G.chromeLimitSize) {
-      apiDownload(fileBlob, fileName, ext, options, requestId);
-      down.destroy();
+      apiDownload(fileBlob, fileName, ext, options, requestId, (ok, error) => {
+        if (ok) { down.destroy(); }
+        onSettled?.(ok, error);
+      });
       return;
     }
     if (options.customFilename && originalExt) {
@@ -1607,16 +1611,23 @@ export function mergeTs(
         down.destroy();
         // 通知 sidepanel 下载流程结束（否则资源行会一直停在“合并中”）
         broadcastProgress({ type: "complete", requestId });
+        // ffmpeg 已接管转码与落盘（终态由 ffmpeg 页保证），本页视为保存成功
+        onSettled?.(true);
         return;
       }
       // ffmpeg 不可用时兜底走浏览器直接下载
-      apiDownload(fileBlob, fileName, ext, options, requestId);
-      down.destroy();
+      apiDownload(fileBlob, fileName, ext, options, requestId, (ok, error) => {
+        if (ok) { down.destroy(); }
+        onSettled?.(ok, error);
+      });
     });
   } else {
     // 文件名自带合法扩展名（如 URL 参数 filename=xxx.mp4）时优先沿用，否则用分片 URL 推断的 ext
-    apiDownload(fileBlob, fileName, originalExt || ext, options, requestId);
-    down.destroy();
+    // destroy 推迟到落盘成功：保存失败时 buffer 仍保留，支持不重新下载直接重试保存
+    apiDownload(fileBlob, fileName, originalExt || ext, options, requestId, (ok, error) => {
+      if (ok) { down.destroy(); }
+      onSettled?.(ok, error);
+    });
   }
 }
 
@@ -1633,7 +1644,9 @@ export function apiDownload(
   fileName: string,
   ext: string,
   options: DownloadOptions,
-  requestId?: string
+  requestId?: string,
+  /** 落盘终态回调：complete → (true)；中断/发起失败 → (false, 原因)。不静默吞任何失败 */
+  onSettled?: (ok: boolean, error?: string) => void
 ): void {
   chrome.downloads.download(
     {
@@ -1647,15 +1660,16 @@ export function apiDownload(
         broadcastProgress({ type: "saving", requestId });
         /** 终态是否已结算（防止 onChanged 与 search 兜底重复广播） */
         let settled = false;
-        /** 下载到达终态（完成/中断）后广播 complete，解除 sidepanel 的“合并中”态 */
-        const finish = function () {
+        /** 下载到达终态（完成/中断）后结算：广播 complete + 回传落盘结果 */
+        const finish = function (ok: boolean, error?: string) {
           if (settled) {
             return;
           }
           settled = true;
           chrome.downloads.onChanged.removeListener(onComplete);
           broadcastProgress({ type: "complete", requestId });
-          if (options.autoClose) {
+          onSettled?.(ok, error);
+          if (ok && options.autoClose) {
             setTimeout(() => window.close(), 300);
           }
         };
@@ -1666,7 +1680,12 @@ export function apiDownload(
             (delta.state.current === "complete" ||
               delta.state.current === "interrupted")
           ) {
-            finish();
+            finish(
+              delta.state.current === "complete",
+              delta.state.current === "interrupted"
+                ? delta.error?.current || "下载中断"
+                : undefined
+            );
           }
         };
         chrome.downloads.onChanged.addListener(onComplete);
@@ -1674,13 +1693,21 @@ export function apiDownload(
         chrome.downloads.search({ id: downloadId }, function (items) {
           const state = items && items[0] && items[0].state;
           if (state === "complete" || state === "interrupted") {
-            finish();
+            finish(
+              state === "complete",
+              state === "interrupted"
+                ? items[0].error || "下载中断"
+                : undefined
+            );
           }
         });
       } else if (
         chrome.runtime?.lastError?.message === "Invalid filename"
       ) {
-        apiDownload(fileBlob, stringModify(fileName), ext, options, requestId);
+        apiDownload(fileBlob, stringModify(fileName), ext, options, requestId, onSettled);
+      } else {
+        // 其余失败（用户取消保存对话框 / 浏览器拒绝等）不再静默吞掉，如实上抛
+        onSettled?.(false, chrome.runtime?.lastError?.message || "保存发起失败");
       }
     }
   );

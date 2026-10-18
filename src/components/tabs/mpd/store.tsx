@@ -199,6 +199,14 @@ export function MpdStoreProvider(props: { children: React.ReactNode }) {
     setDownloadState("downloading");
     setDownloadProgress(0);
     setError("");
+    // 回写嗅探记录状态（background 按 requestId 定位，驱动侧边栏待办队列）
+    const reportState = (state: string) => {
+      if (!requestId) { return; }
+      try {
+        chrome.runtime.sendMessage({ Message: "mediaStateChange", requestId, state });
+      } catch { /* SW 未就绪时忽略 */ }
+    };
+    reportState("downloading");
     try {
       const blobs: Blob[] = [];
       for (let i = 0; i < selected.length; i++) {
@@ -235,15 +243,18 @@ export function MpdStoreProvider(props: { children: React.ReactNode }) {
         return;
       }
       setDownloadState("merging");
+      reportState("merging");
       // 合并轨道（简单字节拼接，复杂 mux 留待 P8）
       const merged = mergeTracks(blobs);
       const fileName = buildFileName(selected[0], mpdUrl, title);
       setDownloadState("complete");
       setDownloadProgress(100);
       saveBlob(merged, fileName);
+      reportState("done");
     } catch (e: any) {
       setError(e?.message || String(e));
       setDownloadState("error");
+      reportState("error");
     }
   }, [tracks, mpdUrl, title, requestId]);
 

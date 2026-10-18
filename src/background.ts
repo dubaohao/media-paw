@@ -454,7 +454,9 @@ function save(tabId) {
         } else {
             console.log(`[猫爪] save 跳过（超99条不持久化） tab=${tabId} 条数=${cacheData[tabId].length}`);
         }
-        SetIcon({ number: cacheData[tabId].length, tabId: tabId });
+        // 徽章只统计未完成数（待办队列语义：done 的记录不再计入；state 为空的历史数据视为未完成）
+        const pendingCount = cacheData[tabId].filter((it: any) => it?.state !== "done").length;
+        SetIcon({ number: pendingCount, tabId: tabId });
     }
 }
 
@@ -707,13 +709,20 @@ chrome.runtime.onMessage.addListener(function (Message, sender, sendResponse) {
     }
     // 清理数据
     if (Message.Message == "clearData") {
-        // 当前标签
+        // 当前标签（待办队列语义：只真删未完成记录，已下载完成 state=done 的记录保留给下载页历史）
         if (Message.type) {
-            delete cacheData[Message.tabId];
+            const list = cacheData[Message.tabId] ?? [];
+            const removedIds = list.filter((it: any) => it?.state !== "done").map((it: any) => it.requestId);
+            const kept = list.filter((it: any) => it?.state === "done");
+            if (kept.length > 0) {
+                cacheData[Message.tabId] = kept;
+            } else {
+                delete cacheData[Message.tabId];
+            }
             (chrome.storage.session ?? chrome.storage.local).set({ MediaData: cacheData });
             clearRedundant();
-            // 广播给所有扩展页面（下载页等）同步清理关联任务
-            try { chrome.runtime.sendMessage({ Message: "MediaDataCleared", type: true, tabId: Message.tabId }); } catch (e) { }
+            // 广播给所有扩展页面（下载页等）同步清理关联任务；requestIds 精确指明被删记录，已完成任务不受影响
+            try { chrome.runtime.sendMessage({ Message: "MediaDataCleared", type: true, tabId: Message.tabId, requestIds: removedIds }); } catch (e) { }
             sendResponse("OK");
             return true;
         }
@@ -736,13 +745,42 @@ chrome.runtime.onMessage.addListener(function (Message, sender, sendResponse) {
             if (index !== -1) {
                 list.splice(index, 1);
                 (chrome.storage.session ?? chrome.storage.local).set({ MediaData: cacheData });
-                // 更新扩展图标数字
+                // 更新扩展图标数字（只统计未完成）
                 if (cacheData[Message.tabId] && cacheData[Message.tabId].length <= 99) {
-                    SetIcon({ number: cacheData[Message.tabId].length, tabId: Message.tabId });
+                    const pendingCount = cacheData[Message.tabId].filter((it: any) => it?.state !== "done").length;
+                    SetIcon({ number: pendingCount, tabId: Message.tabId });
                 }
                 // 广播给所有扩展页面（侧边栏删本地行、下载页关关联任务）
                 try { chrome.runtime.sendMessage({ Message: "MediaDataDeleted", tabId: Message.tabId, requestId: Message.requestId }); } catch (e) { }
             }
+        }
+        sendResponse("OK");
+        return true;
+    }
+    // 下载状态回写：页面端（侧边栏/下载页）上报某条资源的下载状态，写入记录并广播同步
+    // state 取值：downloading（下载中）/ merging（合并中）/ done（已完成）/ error（失败）
+    // tabId 可省略（如 mpd 解析页 URL 未携带）：此时按 requestId 全表扫描定位记录
+    if (Message.Message == "mediaStateChange") {
+        let stateTabId = Message.tabId;
+        const stateRequestId = String(Message.requestId ?? "");
+        const state = Message.state;
+        if (stateRequestId && state) {
+            let item: any = null;
+            if (stateTabId !== undefined && cacheData[stateTabId]) {
+                item = cacheData[stateTabId].find((it: any) => String(it.requestId) === stateRequestId);
+            }
+            if (!item) {
+                for (const key in cacheData) {
+                    const found = cacheData[key]?.find((it: any) => String(it.requestId) === stateRequestId);
+                    if (found) { item = found; stateTabId = key; break; }
+                }
+            }
+            if (item) {
+                item.state = state;
+                save(stateTabId);
+            }
+            // 广播给所有扩展页面（侧边栏过滤已完成/标红失败，其他页面同步状态）
+            try { chrome.runtime.sendMessage({ Message: "mediaStateChanged", tabId: stateTabId, requestId: stateRequestId, state }); } catch (e) { }
         }
         sendResponse("OK");
         return true;

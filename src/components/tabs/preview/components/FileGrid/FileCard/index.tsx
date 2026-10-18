@@ -13,7 +13,7 @@ import {
   isMediaExt
 } from "~components/shared/format"
 import { usePreviewStore } from "~components/tabs/preview/store"
-import s from "~components/tabs/preview/preview.module.css"
+import s from "../../../preview.module.css"
 
 interface FileCardProps {
   item: any

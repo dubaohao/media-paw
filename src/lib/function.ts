@@ -427,17 +427,8 @@ export function clearRedundant() {
     chrome.tabs.query({}, function (tabs) {
         const allTabId = new Set(tabs.map(tab => tab.id));
 
-        if (!cacheData.init) {
-            // 清理 缓存数据
-            let cacheDataFlag = false;
-            for (let key in cacheData) {
-                if (!allTabId.has(Number(key))) {
-                    cacheDataFlag = true;
-                    delete cacheData[key];
-                }
-            }
-            cacheDataFlag && (chrome.storage.session ?? chrome.storage.local).set({ MediaData: cacheData });
-        }
+        // 已关闭标签的嗅探数据保留：不再随标签关闭清理 cacheData，
+        // 数据一直存在，直到用户手动清空 / 单标签超上限自动清 / 浏览器重启（session storage）
 
         // 清理
         G.urlMap.forEach((_, key) => {

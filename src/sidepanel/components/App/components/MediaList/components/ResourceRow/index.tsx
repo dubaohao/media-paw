@@ -20,7 +20,7 @@ import {
 import { useMediaStore } from "~sidepanel/store"
 import { showTips } from "~components/shared/toast-bus"
 import { sendMessage, tabSendMessage } from "~components/shared/api"
-import { InlinePreview, PreviewHandle } from "./components/InlinePreview"
+import { InlinePreview, PreviewHandle } from "~components/shared/InlinePreview"
 
 interface Props {
   data: MediaResource
@@ -304,6 +304,7 @@ export function ResourceRow({ data, isCurrent }: Props) {
         "panel"
         + (dlState ? ` dl dl-${dlState.phase || "downloading"}` : "")
         + (dlState?.errors?.length && dlState.percent !== 100 ? " dl-error" : "")
+        + ((data as any).state === "error" ? " dl-error" : "")
       }
       data-ext={(data.ext || "").toLowerCase()}
       style={
@@ -317,6 +318,7 @@ export function ResourceRow({ data, isCurrent }: Props) {
           type="checkbox"
           className="DownCheck"
           checked={!!data.checked}
+          disabled={data.state === "downloading" || data.state === "merging"}
           onChange={() => toggleCheck(data.requestId, isCurrent)}
           onClick={e => e.stopPropagation()}
         />
